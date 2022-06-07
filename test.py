@@ -94,22 +94,38 @@ def test_pascal(model_name):
     loss_iters, cnn_accuracy_iters,crf_accuracy_iters = [], [],[]
     index =0
     for iter_id, batch in tqdm(enumerate(val_loader)):
+        start_time = time.time()
         index = index +1
         image_ids, image, label = batch
         image_id = image_ids[0]
         cnn_img_label,probmap, loss_seg = test_cnn (model,batch)
         
-        start_time = time.time()
-        raw_image = cv2.imread(img_dir_path + image_id + '.jpg', cv2.IMREAD_COLOR) # shape = [H, W, 3]
-        crf_img_label = test_crf (raw_image,probmap)
+        if TEST_CRF:
+            raw_image = cv2.imread(img_dir_path + image_id + '.jpg', cv2.IMREAD_COLOR) # shape = [H, W, 3]
+            crf_img_label = test_crf (raw_image,probmap)
 
         times += time.time() - start_time
 
+
+        gt_label = Image.open(os.path.join(gt_dir_path, image_id+'.png'))
+        w, h = gt_label.size[0], gt_label.size[1]
+        gt_img_label = np.array(gt_label, dtype=np.int32)
+
+
         cnn_img_label.putpalette(palette)
         cnn_img_label.save(str(cnn_pred_dir)+"/"+image_id + '.png')
+        cnn_pred = Image.open(str(cnn_pred_dir)+ "/"+image_id + '.png')
+        cnn_pred = cnn_pred.crop((0, 0, w, h))
+        cnn_pred = np.array(cnn_pred, dtype=np.int32)
+        cnn_mIOU.add_batch(cnn_pred, gt_img_label)
 
-        crf_img_label.putpalette(palette)
-        crf_img_label.save(str(crf_pred_dir)+ "/"+image_id + '.png')
+        if TEST_CRF:
+            crf_img_label.putpalette(palette)
+            crf_img_label.save(str(crf_pred_dir)+ "/"+image_id + '.png')
+            crf_pred = Image.open(str(crf_pred_dir)+ "/"+image_id + '.png')
+            crf_pred = crf_pred.crop((0, 0, w, h))
+            crf_pred = np.array(crf_pred, dtype=np.int32)
+            crf_mIOU.add_batch(crf_pred, gt_img_label)
         """
         cnn_label_tensor = torch.LongTensor(np.asarray(cnn_img_label))
         cnn_label_tensor = cnn_label_tensor.to(device)
@@ -119,31 +135,22 @@ def test_pascal(model_name):
         """
         #cnn_accuracy = float(torch.eq(cnn_label_tensor, label).sum().cpu()) / ( label.shape[1] * label.shape[2])
         #crf_accuracy = float(torch.eq(crf_label_tensor, label).sum().cpu()) / (label.shape[1] * label.shape[2])
-        cnn_pred = Image.open(str(cnn_pred_dir)+ "/"+image_id + '.png')
-        crf_pred = Image.open(str(crf_pred_dir)+ "/"+image_id + '.png')
-        gt_label = Image.open(os.path.join(gt_dir_path, image_id+'.png'))
-        w, h = gt_label.size[0], gt_label.size[1]
-        gt_img_label = np.array(gt_label, dtype=np.int32)
-
-        cnn_pred = cnn_pred.crop((0, 0, w, h))
-        cnn_pred = np.array(cnn_pred, dtype=np.int32)
-
-        crf_pred = crf_pred.crop((0, 0, w, h))
-        crf_pred = np.array(crf_pred, dtype=np.int32)
-
-        cnn_mIOU.add_batch(cnn_pred, gt_img_label)
-        crf_mIOU.add_batch(crf_pred, gt_img_label)
+        
 
         #cnn_accuracy_iters.append(float(cnn_accuracy))
         #crf_accuracy_iters.append(float(crf_accuracy))
         loss_iters.append(float(loss_seg.cpu()))
+
     acc, acc_cls, iou, miou, fwavacc = cnn_mIOU.evaluate()
     print("CNN Metrics")
     print(acc, acc_cls, iou, miou, fwavacc)
-    acc, acc_cls, iou, miou, fwavacc = crf_mIOU.evaluate()
-    print("CRF Metrics")
-    print(acc, acc_cls, iou, miou, fwavacc)
-    print('dense crf time = %s' % (times / index))
+    if TEST_CRF:
+        acc, acc_cls, iou, miou, fwavacc = crf_mIOU.evaluate()
+        print("CRF Metrics")
+        print(acc, acc_cls, iou, miou, fwavacc)
+        print('dense crf time = %s' % (times / index))
+    else:
+        print('cnn time = %s' % (times / index))
 
 def test_cnn(model, batch):
     _, image, label = batch
