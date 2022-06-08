@@ -69,7 +69,9 @@ def get_model(model_name = "VGG"):
         model = model.to(device)
     return model
 
-def test_pascal(model_name):
+def test_pascal(model_name, use_crf):
+    if use_crf:
+        TEST_CRF = True
     root_dir_path = './data/VOCdevkit/VOC2012'
     img_dir_path = root_dir_path + '/JPEGImages/'
     gt_dir_path = root_dir_path + '/SegmentationClass/'
@@ -190,7 +192,8 @@ def test_crf(raw_image, probmap):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--use_crf',default=False)
     parser.add_argument('--model_name', default='VGG', help='test model path')
     parser.add_argument('--model_path_test', default='./exp/model_last_20000_poly2.pth', help='test model path')
     args = parser.parse_args()
-    test_pascal(args.model_name)
+    test_pascal(args.model_name, args.use_crf)

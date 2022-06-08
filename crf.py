@@ -1,201 +1,154 @@
+#!/usr/bin/env python
+# coding: utf-8
+#
+# Author: Kazuto Nakashima
+# URL:    https://kazuto1011.github.io
+# Date:   09 January 2019
+
+
+
+
+
 import torch
 import torch.nn as nn
-import torch.utils.data
-import numpy as np
+import torch.optim as optim
+import torchvision.models as models
+import torchvision.transforms.functional as F
+
+import itertools, utils
 from PIL import Image
-import time
-from time import strftime, localtime
-import cv2
-import argparse
-import os
-from datasets import VOCDataset
-from nets import vgg
-import utils
-import crf
-from tqdm import tqdm
-from pathlib import Path
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device_ids = [0]
-
-pred_dir_path = './exp/'
+import numpy as np
+import pydensecrf.densecrf as dcrf
+import pydensecrf.utils as utils
 
 
-# class palette for test
-palette = []
-for i in range(256):
-    palette.extend((i,i,i))
-palette[:3*21] = np.array([[0, 0, 0],
-                        [128, 0, 0],
-                        [0, 128, 0],
-                        [128, 128, 0],
-                        [0, 0, 128],
-                        [128, 0, 128],
-                        [0, 128, 128],
-                        [128, 128, 128],
-                        [64, 0, 0],
-                        [192, 0, 0],
-                        [64, 128, 0],
-                        [192, 128, 0],
-                        [64, 0, 128],
-                        [192, 0, 128],
-                        [64, 128, 128],
-                        [192, 128, 128],
-                        [0, 64, 0],
-                        [128, 64, 0],
-                        [0, 192, 0],
-                        [128, 192, 0],
-                        [0, 64, 128]], dtype='uint8').flatten()
-post_processor = crf.DenseCRF(
-    iter_max=10,    # 10
-    pos_xy_std=3,   # 3
-    pos_w=3,        # 3
-    bi_xy_std=140,  # 121, 140
-    bi_rgb_std=5,   # 5, 5
-    bi_w=5,         # 4, 5
-)
-CEL = nn.CrossEntropyLoss(ignore_index=255).to(device)
-
-
-def get_model(model_name = "VGG"):
-    if(model_name =="VGG"):
-        batch_size = 1
-        crop_size = 513
-        model_path_test = './data/model_last_20000_poly2.pth'
-        model = vgg.VGG16_LargeFOV(input_size=crop_size, split='test')
-        model = torch.nn.DataParallel(model, device_ids=device_ids)
-        model.load_state_dict(torch.load(model_path_test))
-        model.eval()
-        model = model.to(device)
-    return model
-
-def test_pascal(model_name, img_id):
-
-
-    root_dir_path = './data/VOCdevkit/VOC2012'
-    img_dir_path = root_dir_path + '/JPEGImages/'
-    gt_dir_path = root_dir_path + '/SegmentationClass/'
-    cnn_pred_dir = Path(pred_dir_path+"labels_"+model_name+"_cnn/")
-    cnn_pred_dir.mkdir(parents=True, exist_ok=True)
-    crf_pred_dir = Path(pred_dir_path+"labels_"+model_name+"_crf/")
-    crf_pred_dir.mkdir(parents=True, exist_ok=True)
-    model = get_model(model_name)
-    batch_size =1
-    crop_size = 513
-    val_loader = torch.utils.data.DataLoader(
-        VOCDataset(split='val', crop_size=crop_size, label_dir_path='SegmentationClassAug', is_scale=False, is_flip=False),
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=4,
-        drop_last=False
-    )
-
-    times = 0.0
-    cnn_mIOU = utils.IOUMetric(num_classes=21)
-    crf_mIOU = utils.IOUMetric(num_classes = 21)
-    loss_iters, cnn_accuracy_iters,crf_accuracy_iters = [], [],[]
-    index =0
-    for iter_id, batch in tqdm(enumerate(val_loader)):
-        index = index +1
-        image_ids, image, label = batch
-
-
-        if img_id is not None:
-            image_id=img_id
-            image = to
-
-
-        image_id = image_ids[0]
-        cnn_img_label,probmap, loss_seg = test_cnn (model,batch)
+class DeepLab_v1():
+    def __init__(self, num_classes, gpu_id=0, weight_file=None):
+        self.num_classes = num_classes
         
-        start_time = time.time()
-        raw_image = cv2.imread(img_dir_path + image_id + '.jpg', cv2.IMREAD_COLOR) # shape = [H, W, 3]
-        crf_img_label = test_crf (raw_image,probmap)
+        self.gpu = gpu_id
 
-        times += time.time() - start_time
+        torch.cuda.set_device(self.gpu)
 
-        cnn_img_label.putpalette(palette)
-        cnn_img_label.save(str(cnn_pred_dir)+"/"+image_id + '.png')
+        self.model = VGG16_LargeFOV(self.num_classes, init_weights=False).cuda(self.gpu)
+        self.model.load_state_dict(torch.load(weight_file))
+        
+        self.mean = torch.Tensor([0.485, 0.456, 0.406]).view(-1, 1, 1).cuda(self.gpu, non_blocking=True)
+        self.std = torch.Tensor([0.229, 0.224, 0.225]).view(-1, 1, 1).cuda(self.gpu, non_blocking=True)
+        
+        self.eps = 1e-10
+        self.best_mIoU = 0.
 
-        crf_img_label.putpalette(palette)
-        crf_img_label.save(str(crf_pred_dir)+ "/"+image_id + '.png')
-        """
-        cnn_label_tensor = torch.LongTensor(np.asarray(cnn_img_label))
-        cnn_label_tensor = cnn_label_tensor.to(device)
-        crf_label_tensor = torch.LongTensor(np.asarray(cnn_img_label))
-        crf_label_tensor = crf_label_tensor.to(device)
-        label = label.to(device)
-        """
-        #cnn_accuracy = float(torch.eq(cnn_label_tensor, label).sum().cpu()) / ( label.shape[1] * label.shape[2])
-        #crf_accuracy = float(torch.eq(crf_label_tensor, label).sum().cpu()) / (label.shape[1] * label.shape[2])
-        cnn_pred = Image.open(str(cnn_pred_dir)+ "/"+image_id + '.png')
-        crf_pred = Image.open(str(crf_pred_dir)+ "/"+image_id + '.png')
-        gt_label = Image.open(os.path.join(gt_dir_path, image_id+'.png'))
-        w, h = gt_label.size[0], gt_label.size[1]
-        gt_img_label = np.array(gt_label, dtype=np.int32)
+    def grid_search(self, data, iter_max, bi_ws, bi_xy_stds, bi_rgb_stds, pos_ws, pos_xy_stds):
 
-        cnn_pred = cnn_pred.crop((0, 0, w, h))
-        cnn_pred = np.array(cnn_pred, dtype=np.int32)
+        self.model.eval()
+        with torch.no_grad():
+            for bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std in itertools.product(bi_ws, bi_xy_stds, bi_rgb_stds, pos_ws, pos_xy_stds):
+                
+                tps = torch.zeros(self.num_classes).cuda(self.gpu, non_blocking=True)
+                fps = torch.zeros(self.num_classes).cuda(self.gpu, non_blocking=True)
+                fns = torch.zeros(self.num_classes).cuda(self.gpu, non_blocking=True)
+                
+                crf = DenseCRF(iter_max, bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std)
+                
+                for i, (image, y) in enumerate(data):
+                    
+                    if i == 100: break
+                        
+                    n, c, h, w = y.shape
+                    y = y.view(n, h, w).type(torch.LongTensor)
+                    
+                    X = image
+                    X, y = X.cuda(self.gpu, non_blocking=True), y.cuda(self.gpu, non_blocking=True)
+                    X = X.float().div(255)
+                    
+                    X = X.sub_(self.mean).div_(self.std)
+                    
+                    output = self.model(X)
+                    output = F.resize(output, (h, w), Image.BILINEAR)
+                    output = nn.Softmax2d()(output)
 
-        crf_pred = crf_pred.crop((0, 0, w, h))
-        crf_pred = np.array(crf_pred, dtype=np.int32)
+                    for j in range(n):
+                        predict = crf(image[j], output[j])
+                        predict = torch.from_numpy(predict).float().cuda(self.gpu, non_blocking=True)
+                        predict = torch.argmax(predict, dim=0)
+                        
+                        filter_255 = y!=255
+                        
+                        for i in range(self.num_classes):
+                            positive_i = predict==i
+                            true_i = y==i
+                            tps[i] += torch.sum(positive_i & true_i)
+                            fps[i] += torch.sum(positive_i & ~true_i & filter_255)
+                            fns[i] += torch.sum(~positive_i & true_i)
+                
+                mIoU = torch.sum(tps / (self.eps + tps + fps + fns)) / self.num_classes
+                
+                state = ('bi_w : {}, bi_xy_std : {}, bi_rgb_std : {}, pos_w : {}, pos_xy_std : {}  '
+                         'mIoU : {:.4f}').format(bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std, 100 * mIoU)
+                
+                if mIoU > self.best_mIoU:
+                    print()
+                    print('*' * 35, 'Best mIoU Updated', '*' * 35)
+                    print(state)
+                    self.best_mIoU = mIoU
+                else:
+                    print(state)
+                    
+    def inference(self, image_dir, iter_max, bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std):
+        self.model.eval()
+        with torch.no_grad():
+            image = Image.open(image_dir).convert('RGB')
+            
+            image_tensor = torch.as_tensor(np.asarray(image))
+            image_tensor = image_tensor.view(image.size[1], image.size[0], len(image.getbands()))
+            image_tensor = image_tensor.permute((2, 0, 1))
+            
+            c, h, w = image_tensor.shape
+            image_norm_tensor = image_tensor[None, ...].float().div(255).cuda(self.gpu, non_blocking=True)
+            
+            image_norm_tensor = image_norm_tensor.sub_(self.mean).div_(self.std)
+            
+            output = self.model(image_norm_tensor)
+            output = F.resize(output, (h, w), Image.BILINEAR)
+            output = nn.Softmax2d()(output)
+            output = output[0]
+            
+            crf = DenseCRF(iter_max, bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std)
+            
+            predict = crf(image_tensor, output)
+            predict = np.argmax(predict, axis=0)
+            return predict
 
-        cnn_mIOU.add_batch(cnn_pred, gt_img_label)
-        crf_mIOU.add_batch(crf_pred, gt_img_label)
 
-        #cnn_accuracy_iters.append(float(cnn_accuracy))
-        #crf_accuracy_iters.append(float(crf_accuracy))
-        loss_iters.append(float(loss_seg.cpu()))
-    acc, acc_cls, iou, miou, fwavacc = cnn_mIOU.evaluate()
-    print("CNN Metrics")
-    print(acc, acc_cls, iou, miou, fwavacc)
-    acc, acc_cls, iou, miou, fwavacc = crf_mIOU.evaluate()
-    print("CRF Metrics")
-    print(acc, acc_cls, iou, miou, fwavacc)
-    print('dense crf time = %s' % (times / index))
+class DenseCRF(object):
+    def __init__(self, iter_max, pos_w, pos_xy_std, bi_w, bi_xy_std, bi_rgb_std):
+        self.iter_max = iter_max
+        self.pos_w = pos_w
+        self.pos_xy_std = pos_xy_std
+        self.bi_w = bi_w
+        self.bi_xy_std = bi_xy_std
+        self.bi_rgb_std = bi_rgb_std
 
-def test_cnn(model, batch):
-    _, image, label = batch
-    crop_size =513
-    image = image.to(device) #shape =[1,C,H,W]
-    labels = utils.resize_labels(label, size=(crop_size, crop_size)).to(device)
-    logits = model(image)
+    def __call__(self, image, probmap):
+        C, H, W = probmap.shape
 
-    probs = nn.functional.softmax(logits, dim=1) # shape = [batch_size, C, H, W]
-    probmap = probs[0].detach().cpu().numpy()
+        U = utils.unary_from_softmax(probmap)
+        U = np.ascontiguousarray(U)
 
-    outputs = torch.argmax(probs, dim=1) # shape = [batch_size, H, W]
-    output = np.array(outputs[0].cpu(), dtype=np.uint8)
-    img_label = Image.fromarray(output)
-    loss_seg = CEL(logits, labels)
-    return img_label,probmap,loss_seg
+        image = np.ascontiguousarray(image)
 
-def test_crf(raw_image, probmap):
-    h, w = raw_image.shape[:2]
-    pad_h = max(513 - h, 0)
-    pad_w = max(513 - w, 0)
-    pad_kwargs = {
-        "top": 0,
-        "bottom": pad_h,
-        "left": 0,
-        "right": pad_w,
-        "borderType": cv2.BORDER_CONSTANT,
-    }
-    raw_image = cv2.copyMakeBorder(raw_image, value=[0, 0, 0], **pad_kwargs)
-    raw_image = raw_image.astype(np.uint8)
-    prob = post_processor(raw_image, probmap)
-    output = np.argmax(prob, axis=0).astype(np.uint8)
-    img_label = Image.fromarray(output)
-    return img_label
+        d = dcrf.DenseCRF2D(W, H, C)
+        d.setUnaryEnergy(U)
+        d.addPairwiseGaussian(sxy=self.pos_xy_std, compat=self.pos_w)
+        d.addPairwiseBilateral(
+            sxy=self.bi_xy_std, srgb=self.bi_rgb_std, rgbim=image, compat=self.bi_w
+        )
 
+        Q = d.inference(self.iter_max)
+        Q = np.array(Q).reshape((C, H, W))
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--image_id', default=None, help="to run on single image")
-    parser.add_argument('--model_name', default='VGG', help='test model path')
-    parser.add_argument('--model_path_test', default='./exp/model_last_20000_poly2.pth', help='test model path')
-    args = parser.parse_args()
-    test_pascal(args.model_name, args.image_id)
+        return Q
 
 
