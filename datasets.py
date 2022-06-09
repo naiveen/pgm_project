@@ -26,12 +26,14 @@ class VOCDataset(torch.utils.data.Dataset):
         self.is_augment = True
         self.is_scale = is_scale
         self.is_flip = is_flip
+
     
     def __len__(self):
         return len(self.image_ids)
 
-    def __getitem__(self, index):
-        image_id = self.image_ids[index]
+    def __getitem__(self, index, image_id =None):
+        if(image_id==None):
+            image_id = self.image_ids[index]
         image_path = os.path.join(self.image_dir_path, image_id + '.jpg')
         label_path = os.path.join(self.label_dir_path, image_id + '.png')
         # Load an image
