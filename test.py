@@ -227,7 +227,7 @@ class DeepLab_v1():
             kl_array=[]
             for bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std in itertools.product(bi_ws, bi_xy_stds, bi_rgb_stds, pos_ws, pos_xy_stds):
                 crf_mIOU = utils.IOUMetric(num_classes = 21)
-                val_loader = torch.utils.data.DataLoader(self.dataset,batch_size=batch_size,shuffle=False,num_workers=2,drop_last=False)
+                val_loader = torch.utils.data.DataLoader(self.dataset,batch_size=1,shuffle=False,num_workers=2,drop_last=False)
                 for iter_id, batch in tqdm(enumerate(val_loader)):
                     if iter_id == 100: break
                     image_ids, image, label = batch
