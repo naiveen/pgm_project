@@ -221,17 +221,23 @@ class DeepLab_v1():
 
     def grid_search(self, iter_max, bi_ws, bi_xy_stds, bi_rgb_stds, pos_ws, pos_xy_stds):
         self.model.eval()
+        best_mIoU = 0.
         mIoU_list =[]
         metrics_list =[]
+        kl_main_array =[]
         with torch.no_grad():
             kl_array=[]
+            val_loader = torch.utils.data.DataLoader(self.dataset,batch_size=1,shuffle=False,num_workers=2,drop_last=False)
+            image_id_list =[]
+            for iter_id, batch in enumerate(val_loader):
+                image_ids, image, label = batch
+                image_id = image_ids[0]
+                image_id_list.append(image_id)
             for bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std in itertools.product(bi_ws, bi_xy_stds, bi_rgb_stds, pos_ws, pos_xy_stds):
                 crf_mIOU = utils.IOUMetric(num_classes = 21)
                 val_loader = torch.utils.data.DataLoader(self.dataset,batch_size=1,shuffle=False,num_workers=2,drop_last=False)
-                for iter_id, batch in tqdm(enumerate(val_loader)):
+                for iter_id, image_id in tqdm(enumerate(image_id_list)):
                     if iter_id == 100: break
-                    image_ids, image, label = batch
-                    image_id = image_ids[0]
                     gt_label = Image.open(os.path.join(self.gt_dir_path, image_id+'.png'))
                     w, h = gt_label.size[0], gt_label.size[1]
                     gt_img_label = np.array(gt_label, dtype=np.int32)
@@ -246,16 +252,15 @@ class DeepLab_v1():
                 mIoU = metrics[3]
                 mIoU_list.append(mIoU)
                 metrics_list.append(metrics)
-                
+                kl_main_array.append(kl_array)
                 state = ('bi_w : {}, bi_xy_std : {}, bi_rgb_std : {}, pos_w : {}, pos_xy_std : {}  '
                          'mIoU : {:.4f}').format(bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std, 100 * mIoU)
-                
-                if mIoU > self.best_mIoU:
+                if mIoU > best_mIoU:
                     print()
                     print('*' * 35, 'Best mIoU Updated', '*' * 35)
                     print(state)
-                    self.best_mIoU = mIoU
-                return metrics_list, mIoU_list, np.mean(kl_array,axis=0)
+                    best_mIoU = mIoU
+        return metrics_list, mIoU_list, kl_main_array
                     
     def inference(self, image_path, model_type, iter_max, bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std):
         self.model.eval()
@@ -276,9 +281,17 @@ class DeepLab_v1():
             cnn_img_label,probmap =  test_cnn(self.model, (image_id,image_tensor,label))
             cnn_img_label.putpalette(palette)
             #image = np.transpose(image,(1,2,0))
+            crf_processor= crf.DenseCRF(
+                iter_max=10,    
+                pos_xy_std=pos_xy_std,   
+                pos_w=pos_w,        
+                bi_xy_std=bi_xy_std,  
+                bi_rgb_std=bi_rgb_std,
+                bi_w=bi_w,         
+            )
             if TEST_CRF:
                 raw_image = cv2.imread(self.img_dir_path + image_id + '.jpg', cv2.IMREAD_COLOR) # shape = [H, W, 3]
-                crf_img_label = test_crf (raw_image,probmap,post_processor)
+                crf_img_label = test_crf (raw_image,probmap,crf_processor)
                 crf_img_label.putpalette(palette)                
                 return crf_img_label, crf_img_label
             return cnn_img_label, probmap
@@ -296,12 +309,21 @@ class DeepLab_v1():
             label = label.unsqueeze(0)
             label = label.unsqueeze(0)
             image = np.transpose(image,(1,2,0))
-            crf_processor = crf.DenseCRF_step(iter_max, bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std)
+
+
+            crf_processor_step = crf.DenseCRF_step(
+                iter_max=10,    
+                pos_xy_std=pos_xy_std,   
+                pos_w=pos_w,        
+                bi_xy_std=bi_xy_std,  
+                bi_rgb_std=bi_rgb_std,
+                bi_w=bi_w,         
+            )
             cnn_img_label,probmap =  test_cnn(self.model, (image_id,image_tensor,label))
             cnn_img_label.putpalette(palette)
             #image = np.transpose(image,(1,2,0))
             raw_image = cv2.imread(self.img_dir_path + image_id + '.jpg', cv2.IMREAD_COLOR) # shape = [H, W, 3]
-            Q_list, kl_loss = test_crf_step (raw_image,probmap,crf_processor)
+            Q_list, kl_loss = test_crf_step (raw_image,probmap,crf_processor_step)
             for Q in Q_list:
                 Q.putpalette(palette)
             return Q_list, kl_loss
