@@ -227,9 +227,8 @@ class DeepLab_v1():
             kl_array=[]
             for bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std in itertools.product(bi_ws, bi_xy_stds, bi_rgb_stds, pos_ws, pos_xy_stds):
                 crf_mIOU = utils.IOUMetric(num_classes = 21)
-                
-                
-                for iter_id, batch in tqdm(enumerate(self.val_loader)):
+                val_loader = torch.utils.data.DataLoader(self.dataset,batch_size=batch_size,shuffle=False,num_workers=2,drop_last=False)
+                for iter_id, batch in tqdm(enumerate(val_loader)):
                     if iter_id == 100: break
                     image_ids, image, label = batch
                     image_id = image_ids[0]
@@ -256,7 +255,7 @@ class DeepLab_v1():
                     print('*' * 35, 'Best mIoU Updated', '*' * 35)
                     print(state)
                     self.best_mIoU = mIoU
-                return metrics_list, mIoU_list, np.mean(kl_array)
+                return metrics_list, mIoU_list, np.mean(kl_array,axis=0)
                     
     def inference(self, image_path, model_type, iter_max, bi_w, bi_xy_std, bi_rgb_std, pos_w, pos_xy_std):
         self.model.eval()
